@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!-- Security Architecture Playground — draw a design, pick an adversary,
+     watch the kill chain propagate, and read what your sensors actually saw. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security Architecture Playground</title>
+  <link rel="stylesheet" href="/static/style.css__XTPQ__">
+</head>
+<body>
+  <!-- ======================= top bar ======================= -->
+  <header id="topbar">
+    <div class="brand">SEC<span>ARCH</span>·PLAYGROUND</div>
+
+    <div class="tb-group" id="design-controls">
+      <button id="btn-scenarios" class="btn" title="Create, duplicate and edit adversary scenarios">Scenarios</button>
+      <button id="btn-example" class="btn" title="Load the bundled example architecture">Load example</button>
+      <button id="btn-clear" class="btn" title="Remove everything from the canvas">Clear</button>
+      <button id="btn-export" class="btn" title="Download this design as JSON">Export</button>
+      <label class="btn file-btn" title="Load a design from JSON">Import
+        <input type="file" id="file-import" accept=".json" hidden></label>
+    </div>
+
+    <div class="tb-group" id="run-config">
+      <label class="fld">Scenario
+        <select id="scenario-select"></select></label>
+      <label class="fld" title="Benign events per simulated minute — alert fatigue is part of the game">
+        Noise <input type="range" id="noise-rate" min="0" max="100" step="5" value="20">
+        <span id="noise-val">20</span>/min</label>
+      <button id="btn-run" class="btn primary">Run &#9654;</button>
+    </div>
+
+    <div class="tb-group hidden" id="playback-controls">
+      <button id="btn-back" class="btn" title="Back to design mode">&#8592; Design</button>
+      <button id="btn-play" class="btn primary">Pause</button>
+      <button id="btn-next-step" class="btn" title="Jump to the next kill-chain step">Next step &#9197;</button>
+      <select id="speed" class="fld-sel" title="Playback speed">
+        <option value="0.5">0.5&times;</option>
+        <option value="1" selected>1&times;</option>
+        <option value="2">2&times;</option>
+        <option value="4">4&times;</option>
+      </select>
+      <div id="progress" title="Click to seek"><div id="progress-fill"></div></div>
+      <label class="chk" title="Also render attacker activity that NO sensor covered — the ground-truth check">
+        <input type="checkbox" id="show-gt"> show unseen activity</label>
+    </div>
+
+    <div class="tb-spacer"></div>
+    <div class="hint" id="mode-hint">drag from the palette &amp; drop on the canvas &middot; link tool toggles a connection &middot; hosts carry EDR / Sysmon toggles in the inspector</div>
+  </header>
+
+  <!-- ================== canvas + side panels ================== -->
+  <main id="main">
+    <aside id="palette"><!-- populated by canvas.js --></aside>
+
+    <section id="canvas-wrap">
+      <div id="view">
+        <svg id="edge-svg"><!-- edges --></svg>
+        <div id="node-layer"><!-- component nodes --></div>
+      </div>
+      <div id="place-ghost" class="hidden"></div>
+    </section>
+
+    <aside id="inspector"><div class="insp-empty">Select a component to inspect it.<br><br>
+      Sensors only see the data sources they subscribe to, on the host/segment
+      they are wired to. A SIEM only shows what is shipped to it. Blind spots
+      are the point.</div></aside>
+  </main>
+
+  <!-- ======================= run panel ======================= -->
+  <section id="run-panel" class="hidden">
+    <nav id="tabs">
+      <button class="tab active" data-tab="console">Defender console</button>
+      <button class="tab" data-tab="adversary">Adversary view (ground truth)</button>
+      <button class="tab" data-tab="matrix">Coverage matrix</button>
+      <button class="tab" data-tab="summary">Summary</button>
+      <div id="alert-tally" title="Alerts raised so far"></div>
+    </nav>
+
+    <div id="tab-body">
+      <div id="tab-console" class="tab-page active">
+        <div id="console-head">
+          <span class="legend"><i class="sw sw-alert"></i>alert</span>
+          <span class="legend"><i class="sw sw-att"></i>attacker row</span>
+          <span class="legend"><i class="sw sw-noise"></i>benign row</span>
+          <span class="legend"><i class="sw sw-unseen"></i>unseen (ground truth)</span>
+          <span id="row-count"></span>
+        </div>
+        <div id="console" class="mono"></div>
+      </div>
+      <div id="tab-adversary" class="tab-page"></div>
+      <div id="tab-matrix" class="tab-page"><div id="matrix-holder"></div></div>
+      <div id="tab-summary" class="tab-page"></div>
+    </div>
+  </section>
+
+  <script>window.XTPQ = "__XTPQ__";</script>
+  <script src="/static/js/canvas.js__XTPQ__"></script>
+  <script src="/static/js/player.js__XTPQ__"></script>
+  <script src="/static/js/editor.js__XTPQ__"></script>
+  <script src="/static/js/app.js__XTPQ__"></script>
+</body>
+</html>
