@@ -8,6 +8,8 @@ an honest verdict: blocked, detected, observed, or blind. No percentages, no
 scores. Blind spots are something you walk into and feel, not a number in a
 report.
 
+**Live demo** -> https://breach-bench.vercel.app/
+
 ## Quick start
 
 ```bash
