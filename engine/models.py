@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, asdict
 # ---------------------------------------------------------------------------
 HOST_TYPES      = {"workstation", "server_win", "server_linux", "web_server"}
 WINDOWS_TYPES   = {"workstation", "server_win", "web_server"}   # Sysmon-capable
-SENSOR_KINDS    = {"edr", "sysmon", "zeek", "netflow", "siem"}
+SENSOR_KINDS    = {"edr", "sysmon", "zeek", "netflow", "siem", "ids"}
 APPLIANCE_KINDS = {"waf", "firewall", "mail_gateway"}
 CLOUD_KINDS     = {"idp", "iam", "s3"}                          # own audit logs
 SUBNET_TYPES    = {"subnet"}

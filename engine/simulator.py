@@ -74,9 +74,9 @@ def _seen_detail(inst) -> str:
 # main entry
 # ---------------------------------------------------------------------------
 def simulate(graph: Graph, scenario: dict, noise_rate: int = 20,
-             seed: int | None = None) -> dict:
+             seed: int | None = None, edr_caps: dict | None = None) -> dict:
     rng = random.Random(seed)
-    coverage = Coverage(graph)
+    coverage = Coverage(graph, edr_caps=edr_caps)
     entry = next((n for n in graph.nodes if n.type == "internet"), None)
     has_entry = entry is not None
 
@@ -277,7 +277,7 @@ def _coverage_matrix(graph: Graph, coverage: Coverage) -> dict:
                     for inst in coverage.host_sensors.get(n.id, []):
                         if inst.via_siem:
                             continue
-                        if ds in SENSOR_SPECS[inst.kind]["sources"]:
+                        if ds in coverage.sources_for(inst.kind):
                             tag = KIND_TAG[inst.kind]
                             if tag not in tags:
                                 tags.append(tag)

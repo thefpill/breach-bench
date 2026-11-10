@@ -52,6 +52,15 @@ TEMPLATES: list[dict] = [
     {"kind": "zeek", "pool": "any", "ds": "Network Traffic Content",
      "process": "", "cmd": "",
      "details": {"method": "GET", "path": "/assets/app.3f2a.js", "status": 200}},
+    # --- IDS (signature engine) noise -----------------------------------------
+    {"kind": "ids", "pool": "any", "ds": "Network Traffic Content",
+     "process": "", "cmd": "",
+     "details": {"signature": "ET INFO Observed DNS Query to CDN Domain",
+                 "category": "info", "priority": 3}},
+    {"kind": "ids", "pool": "any", "ds": "Network Traffic Content",
+     "process": "", "cmd": "",
+     "details": {"signature": "ET POLICY HTTP GET to known software-update host",
+                 "category": "policy", "priority": 3}},
     # --- NetFlow noise ---------------------------------------------------------
     {"kind": "netflow", "pool": "any", "ds": "Network Connection Creation",
      "process": "", "cmd": "",

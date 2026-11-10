@@ -6,7 +6,8 @@ with *deliberate* observability gaps:
   * EDR toggle ON on WS-001  → WS-002 stays a blind host
   * FILE-01 carries no agent → lateral movement is invisible
   * Zeek only on the DMZ     → LAN network traffic unseen
-  * SIEM wired to some, not all sensors
+  * IDS signatures on the DMZ SPAN → the LAN has no NDR coverage
+  * SIEM wired to some, not all sensors (the IDS ships nowhere)
   * cloud audit logs NOT shipped to the SIEM → the cloud is a black box
   * firewall egress = default-allow → C2 and exfil flow freely (toggle it!)
 
@@ -31,6 +32,7 @@ def build() -> Graph:
     # --- DMZ ------------------------------------------------------------------
     n("dmz", "subnet", "DMZ", 335, 105)
     n("zeek", "zeek", "Zeek (DMZ SPAN)", 335, 30)
+    n("ids", "ids", "IDS (DMZ SPAN)", 150, 30)
     n("app01", "web_server", "APP-01 (IIS)", 505, 105, sysmon=True)
 
     # --- corporate LAN ---------------------------------------------------------
@@ -51,7 +53,7 @@ def build() -> Graph:
     e = lambda a, b: g.add_edge(Edge(id=f"e-{a}-{b}", src=a, dst=b))
     # perimeter & segments
     e("internet", "fw-core"); e("fw-core", "dmz"); e("dmz", "lan")
-    e("dmz", "app01"); e("zeek", "dmz")
+    e("dmz", "app01"); e("zeek", "dmz"); e("ids", "dmz")
     e("lan", "ws001"); e("lan", "ws002"); e("lan", "file01")
     # SIEM ingest (only some sensors ship logs!) — hosts with an agent
     # toggle forward their telemetry when wired to the SIEM

@@ -23,6 +23,9 @@
   'use strict';
 
   const wrap = document.getElementById('canvas-wrap');
+  const scroller = document.getElementById('canvas-scroll');
+  const stage = document.getElementById('zoom-stage');
+  const viewEl = document.getElementById('view');
   const svg = document.getElementById('edge-svg');
   const layer = document.getElementById('node-layer');
   const ghost = document.getElementById('place-ghost');
@@ -48,6 +51,7 @@
     edr:          { tag: 'EDR',   name: 'EDR agent',           cls: 'sensor',    desc: '(legacy component — hosts now carry an EDR toggle in the inspector) Full process tree, command lines, file writes, network with process attribution.' },
     sysmon:       { tag: 'SYS',   name: 'Sysmon / Win event log', cls: 'sensor', desc: '(legacy component — hosts now carry a Sysmon toggle in the inspector) Process creation, script blocks, logons. Windows hosts only.' },
     zeek:         { tag: 'ZK',    name: 'Zeek (SPAN port)',    cls: 'sensor',    desc: 'Network metadata (connections, SNI, HTTP) for the segment it monitors — but zero process context.' },
+    ids:          { tag: 'IDS',   name: 'IDS / NDR (SPAN)',    cls: 'sensor',    desc: 'Signature-based network detection (Suricata-style). Monitors the segment it SPANs: exploit/C2/scanning signatures on the payload itself — no process context, so it detects but rarely explains.' },
     netflow:      { tag: 'NF',    name: 'NetFlow collector',   cls: 'sensor',    desc: 'Raw 5-tuples. Link to a segment or to the backbone firewall (then it sees everything transiting).' },
     siem:         { tag: 'SIEM',  name: 'SIEM',                cls: 'sensor',    desc: 'Only shows what other sensors ship to it. Wire hosts, network sensors or cloud services to it. Cloud audit rows reach your console ONLY through a SIEM link.' },
     idp:          { tag: 'IdP',   name: 'IdP / SSO',           cls: 'cloud',     desc: 'Cloud identity. With MFA on, phished credentials alone cannot sign in. Exploiting an exposed IdP appliance is nearly invisible (appliance = black box).' },
@@ -58,7 +62,7 @@
   const PALETTE_GROUPS = [
     { group: 'Network', items: ['internet', 'subnet', 'firewall', 'waf', 'mail_gateway'] },
     { group: 'Compute', items: ['workstation', 'server_win', 'server_linux', 'web_server'] },
-    { group: 'Detection', items: ['zeek', 'netflow', 'siem'] },   // EDR/Sysmon moved onto hosts
+    { group: 'Detection', items: ['zeek', 'ids', 'netflow', 'siem'] },   // EDR/Sysmon moved onto hosts
     { group: 'Identity & Cloud', items: ['idp', 'iam', 's3'] },
   ];
 
@@ -74,6 +78,17 @@
   let changeCb = null;
   let drag = null;              // active node drag info
   let palDrag = null;           // active palette drag info {type, moved}
+
+  // -- zoom / multi-select / per-asset line hiding -------------------------
+  let zoom = 1;                 // current canvas scale (1 = 100%)
+  let prevZoom = 1;             // zoom to restore after a run's auto-fit
+  let marquee = null;           // active rubber-band {x0,y0,x1,y1,moved}
+  let suppressClick = false;    // swallow the click that ends a marquee drag
+  const selection = new Set();   // multi-selected node ids (marquee / shift-click)
+  const hiddenNodes = new Set(); // assets whose connection lines are hidden
+  const marqueeEl = document.createElement('div');
+  marqueeEl.id = 'marquee';
+  viewEl.appendChild(marqueeEl);
 
   // ---------------------------- helpers ------------------------------
   const node = (id) => G.nodes.find((n) => n.id === id);
@@ -96,6 +111,71 @@
     ghost.style.left = (clientX - rect.left) + 'px';
     ghost.style.top = (clientY - rect.top) + 'px';
   }
+
+  // ---------------- zoom & coordinate mapping ---------------------------
+  function toCanvas(clientX, clientY) {
+    // screen position -> logical canvas position (scroll + zoom aware)
+    const r = scroller.getBoundingClientRect();
+    return { x: (clientX - r.left + scroller.scrollLeft) / zoom,
+             y: (clientY - r.top + scroller.scrollTop) / zoom };
+  }
+
+  // The canvas is an expanding world: it always covers the viewport, the
+  // zoomed-out field of view and every node (plus a margin), so dragging an
+  // asset toward any edge simply grows the canvas — there is no hard wall.
+  let worldW = 0, worldH = 0;   // logical (unzoomed) canvas size
+  const WORLD_PAD = 140;        // margin kept beyond the rightmost node
+  const WORLD_CAP = 40000;      // sanity ceiling
+
+  function computeWorld() {
+    let maxX = 0, maxY = 0;
+    for (const n of G.nodes) {
+      if (n.x > maxX) maxX = n.x;
+      if (n.y > maxY) maxY = n.y;
+    }
+    // when zoomed out, the visible logical span is viewport / zoom — the
+    // world must cover it, otherwise the old edge shows as an invisible wall
+    const visW = zoom < 1 ? wrap.clientWidth / zoom : 0;
+    const visH = zoom < 1 ? wrap.clientHeight / zoom : 0;
+    worldW = Math.min(WORLD_CAP,
+      Math.max(wrap.clientWidth, visW, maxX + WORLD_PAD));
+    worldH = Math.min(WORLD_CAP,
+      Math.max(wrap.clientHeight, visH, maxY + WORLD_PAD));
+  }
+
+  function applyView() {
+    // stage carries the layout size (world*zoom) so the scrollbars track
+    // the scaled content; #view stays world-sized and gets transform-scaled
+    computeWorld();
+    stage.style.width = (worldW * zoom) + 'px';
+    stage.style.height = (worldH * zoom) + 'px';
+    viewEl.style.width = worldW + 'px';
+    viewEl.style.height = worldH + 'px';
+    viewEl.style.transform = `scale(${zoom})`;
+    // the SVG must stay 1:1 with #view: a stale viewBox letterboxes the
+    // edges away from the nodes after any world/zoom change (the bug where
+    // lines only re-aligned after clicking the canvas)
+    svg.setAttribute('viewBox', `0 0 ${worldW} ${worldH}`);
+    const zl = document.getElementById('zoom-label');
+    if (zl) zl.textContent = Math.round(zoom * 100) + '%';
+  }
+
+  function setZoomAt(nz, clientX, clientY) {
+    // change zoom while keeping the canvas point under the cursor fixed
+    const r = scroller.getBoundingClientRect();
+    const cx = clientX - r.left, cy = clientY - r.top;
+    const lx = (cx + scroller.scrollLeft) / zoom;
+    const ly = (cy + scroller.scrollTop) / zoom;
+    zoom = Math.min(3, Math.max(0.35, nz));
+    applyView();
+    scroller.scrollLeft = lx * zoom - cx;
+    scroller.scrollTop = ly * zoom - cy;
+  }
+
+  scroller.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    setZoomAt(zoom * (ev.deltaY < 0 ? 1.15 : 1 / 1.15), ev.clientX, ev.clientY);
+  }, { passive: false });
 
   function arm(type) {          // arm a palette type (show ghost, switch tool)
     armed = type;
@@ -145,8 +225,8 @@
       const hit = document.elementFromPoint(ev.clientX, ev.clientY);
       if (hit && hit.closest('#canvas-wrap')) {
         // drop: place the component where the pointer is
-        const rect = wrap.getBoundingClientRect();
-        place(armed, ev.clientX - rect.left, ev.clientY - rect.top);
+        const p = toCanvas(ev.clientX, ev.clientY);
+        place(armed, p.x, p.y);
         arm(null);
       } else if (hit && hit.closest('.pal-item') === item) {
         // plain click on the item: stay armed, user will click the canvas
@@ -175,6 +255,30 @@
     toolbar.querySelectorAll('button').forEach((b) =>
       b.addEventListener('click', () => { if (!running) setTool(b.dataset.t); }));
     wrap.appendChild(toolbar);
+    buildZoombar();
+  }
+
+  // zoom + line-visibility controls (fixed to the wrap, outside the scroller)
+  function buildZoombar() {
+    const zb = document.createElement('div');
+    zb.id = 'zoombar';
+    zb.innerHTML = `
+      <button class="btn" id="z-out" title="zoom out (the mouse wheel zooms too)">&minus;</button>
+      <button class="btn" id="z-reset" title="reset zoom to 100%"><span id="zoom-label">100%</span></button>
+      <button class="btn" id="z-in" title="zoom in (the mouse wheel zooms too)">+</button>
+      <button class="btn" id="z-unhide" title="show every hidden connection line again">unhide lines</button>`;
+    const center = () => {
+      const r = scroller.getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2];
+    };
+    zb.querySelector('#z-in').addEventListener('click', () => { const [x, y] = center(); setZoomAt(zoom * 1.2, x, y); });
+    zb.querySelector('#z-out').addEventListener('click', () => { const [x, y] = center(); setZoomAt(zoom / 1.2, x, y); });
+    zb.querySelector('#z-reset').addEventListener('click', () => { const [x, y] = center(); setZoomAt(1, x, y); });
+    zb.querySelector('#z-unhide').addEventListener('click', () => {
+      if (!hiddenNodes.size) return;
+      hiddenNodes.clear(); renderEdges(); renderNodes();
+    });
+    wrap.appendChild(zb);
   }
 
   function setTool(t) {
@@ -194,17 +298,18 @@
   // ---------------------------- rendering ------------------------------
   function fitView() {
     // Auto-fit during a run so the whole design stays visible in the
-    // smaller (split-screen) canvas area. Design mode resets to 1:1.
-    const view = document.getElementById('view');
-    if (!running || !G.nodes.length) { view.style.transform = ''; return; }
+    // smaller (split-screen) canvas area. Design mode keeps the user zoom.
+    if (!running || !G.nodes.length) { applyView(); return; }
     const xs = G.nodes.map((n) => n.x), ys = G.nodes.map((n) => n.y);
     const minX = Math.min(...xs) - 90, maxX = Math.max(...xs) + 90;
     const minY = Math.min(...ys) - 70, maxY = Math.max(...ys) + 70;
-    const s = Math.min(1, wrap.clientWidth / (maxX - minX), wrap.clientHeight / (maxY - minY));
-    view.style.transform = `scale(${s})`;
+    zoom = Math.max(0.3, Math.min(1.25,
+      wrap.clientWidth / (maxX - minX), wrap.clientHeight / (maxY - minY)));
+    applyView();
   }
 
   function renderAll() {
+    applyView();      // the world may need to grow/shrink to fit the nodes
     renderEdges();
     renderNodes();
     renderInspector();
@@ -231,25 +336,29 @@
       d.className = 'node'; d.dataset.id = n.id; d.dataset.cls = TYPES[n.type] ? TYPES[n.type].cls : 'net';
       d.style.left = n.x + 'px'; d.style.top = n.y + 'px';
       const badges = badgesOf(n);
+      const hidden = hiddenNodes.has(n.id);
       d.innerHTML = `<div class="tag">${(TYPES[n.type] || { tag: n.type }).tag}</div>
                      <div class="lbl">${esc(n.label)}</div>` +
-        (badges.length ? `<div class="badges">${badges.map((b) => `<i>${b}</i>`).join('')}</div>` : '');
+        (badges.length ? `<div class="badges">${badges.map((b) => `<i>${b}</i>`).join('')}</div>` : '') +
+        `<button class="eye-btn${hidden ? ' off' : ''}" title="${hidden ? 'show' : 'hide'} this asset's connection lines">${hidden ? '\u25CC' : '\u25C9'}</button>`;
       if (sel && sel.kind === 'node' && sel.id === n.id) d.classList.add('sel');
+      if (selection.has(n.id)) d.classList.add('multi-sel');
       if (linkFrom === n.id) d.classList.add('link-from');
-      attachNodeEvents(d, n);
+      attachNodeEvents(d, n, hidden);
       layer.appendChild(d);
     }
   }
 
   function renderEdges() {
-    const W = wrap.clientWidth || 1200, H = wrap.clientHeight || 700;
-    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    // viewBox is owned by applyView() so edges can never drift out of sync
     let out = `<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5"
       markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3b4d"/></marker></defs>`;
     for (const e of G.edges) {
       const a = node(e.src), b = node(e.dst);
       if (!a || !b) continue;
+      // per-asset line hiding: either endpoint can hide the edge
+      if (hiddenNodes.has(a.id) || hiddenNodes.has(b.id)) continue;
       const selected = sel && sel.kind === 'edge' && sel.id === e.id;
       // fat invisible "hit" line first: makes thin edges clickable/unlinkable
       out += `<line class="edge-hit" data-id="${e.id}"
@@ -270,32 +379,64 @@
   }
 
   // ---------------------------- interactions ------------------------------
-  function attachNodeEvents(d, n) {
+  function attachNodeEvents(d, n, hidden) {
+    // the ◉ toggle is its own control — never start a node drag from it
+    const eye = d.querySelector('.eye-btn');
+    eye.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    eye.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (running) return;                    // visuals locked during playback
+      if (hiddenNodes.has(n.id)) hiddenNodes.delete(n.id); else hiddenNodes.add(n.id);
+      renderEdges(); renderNodes();
+    });
+
     d.addEventListener('pointerdown', (ev) => {
+      if (ev.target.closest('.eye-btn')) return;
       if (running) { select({ kind: 'node', id: n.id }); return; }
       if (armed) return;                       // placing a new component wins
+      if (ev.shiftKey && tool === 'select') {  // additive multi-select
+        if (selection.has(n.id)) selection.delete(n.id); else selection.add(n.id);
+        renderNodes(); renderInspector();
+        return;
+      }
       if (tool === 'delete') { removeNode(n.id); return; }
       if (tool === 'link') {
         if (!linkFrom) { linkFrom = n.id; renderNodes(); }
         else if (linkFrom !== n.id) { toggleEdge(linkFrom, n.id); linkFrom = null; renderAll(); emitChange(); }
         return;
       }
-      // select + drag: record anchor points, move deltas relative to the start
+      if (!selection.has(n.id)) selection.clear();   // clicking outside resets it
+      // drag: remember each node's origin so a multi-selection moves as one
+      const ids = (selection.has(n.id) && selection.size > 1) ? [...selection] : [n.id];
+      const origins = new Map();
+      for (const id of ids) { const m = node(id); if (m) origins.set(id, { x: m.x, y: m.y }); }
       ev.preventDefault();
-      const rect = wrap.getBoundingClientRect();
-      drag = { id: n.id, px: ev.clientX - rect.left, py: ev.clientY - rect.top,
-               x0: n.x, y0: n.y, moved: false };
+      const p0 = toCanvas(ev.clientX, ev.clientY);
+      drag = { id: n.id, px: p0.x, py: p0.y, origins, moved: false };
       try { d.setPointerCapture(ev.pointerId); } catch { /* ok */ }
     });
     d.addEventListener('pointermove', (ev) => {
       if (!drag || drag.id !== n.id) return;
-      const rect = wrap.getBoundingClientRect();
-      const dx = (ev.clientX - rect.left) - drag.px;
-      const dy = (ev.clientY - rect.top) - drag.py;
-      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-      n.x = Math.max(24, Math.min(wrap.clientWidth - 24, drag.x0 + dx));
-      n.y = Math.max(24, Math.min(wrap.clientHeight - 24, drag.y0 + dy));
-      const eln = el(n.id); eln.style.left = n.x + 'px'; eln.style.top = n.y + 'px';
+      const p = toCanvas(ev.clientX, ev.clientY);
+      const dx = p.x - drag.px, dy = p.y - drag.py;
+      if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+      for (const [id, o] of drag.origins) {
+        const m = node(id); if (!m) continue;
+        // no upper clamp: the world below grows to fit the drag, so an
+        // asset can be carried anywhere (only a sanity ceiling remains)
+        m.x = Math.max(24, Math.min(WORLD_CAP - 24, o.x + dx));
+        m.y = Math.max(24, Math.min(WORLD_CAP - 24, o.y + dy));
+        const eln = el(id);
+        if (eln) { eln.style.left = m.x + 'px'; eln.style.top = m.y + 'px'; }
+      }
+      // grow the canvas under the cursor — the group's extreme node drives it
+      let extX = 0, extY = 0;
+      for (const [id] of drag.origins) {
+        const m = node(id); if (!m) continue;
+        if (m.x > extX) extX = m.x;
+        if (m.y > extY) extY = m.y;
+      }
+      if (extX > worldW - WORLD_PAD || extY > worldH - WORLD_PAD) applyView();
       renderEdges();
     });
     const endDrag = (ev) => {
@@ -316,23 +457,131 @@
     setGhostPos(ev.clientX, ev.clientY);
   });
 
-  wrap.addEventListener('click', (ev) => {
-    if (running || ev.target.closest('.node') || ev.target.closest('.edge-hit') || ev.target.closest('button')) return;
-    if (armed) {
-      const rect = wrap.getBoundingClientRect();
-      place(armed, ev.clientX - rect.left, ev.clientY - rect.top);
-      if (!ev.shiftKey) arm(null);
-    } else { select(null); }
+  // ------------------ rubber-band multi-select -----------------------------
+  function drawMarquee() {
+    if (!marquee) return;
+    marqueeEl.style.display = 'block';
+    marqueeEl.style.left = Math.min(marquee.x0, marquee.x1) + 'px';
+    marqueeEl.style.top = Math.min(marquee.y0, marquee.y1) + 'px';
+    marqueeEl.style.width = Math.abs(marquee.x1 - marquee.x0) + 'px';
+    marqueeEl.style.height = Math.abs(marquee.y1 - marquee.y0) + 'px';
+  }
+
+  scroller.addEventListener('pointerdown', (ev) => {
+    if (running || ev.button !== 0 || armed) return;
+    if (ev.target.closest('.node') || ev.target.closest('button') ||
+        ev.target.closest('.edge-hit')) return;
+    const p = toCanvas(ev.clientX, ev.clientY);
+    marquee = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
+    try { scroller.setPointerCapture(ev.pointerId); } catch { /* ok */ }
+    drawMarquee();
+  });
+  scroller.addEventListener('pointermove', (ev) => {
+    if (!marquee) return;
+    const p = toCanvas(ev.clientX, ev.clientY);
+    marquee.x1 = p.x; marquee.y1 = p.y;
+    if (Math.abs(marquee.x1 - marquee.x0) + Math.abs(marquee.y1 - marquee.y0) > 4) {
+      marquee.moved = true;
+    }
+    drawMarquee();
+  });
+  scroller.addEventListener('pointerup', () => {
+    if (!marquee) return;
+    const m = marquee; marquee = null; marqueeEl.style.display = 'none';
+    if (!m.moved) return;                     // plain click: the click handler decides
+    const x0 = Math.min(m.x0, m.x1), x1 = Math.max(m.x0, m.x1);
+    const y0 = Math.min(m.y0, m.y1), y1 = Math.max(m.y0, m.y1);
+    selection.clear();
+    sel = null;
+    for (const n of G.nodes) {
+      // nodes are center-positioned; pad by their half-size (~54x32)
+      if (n.x >= x0 - 54 && n.x <= x1 + 54 && n.y >= y0 - 32 && n.y <= y1 + 32) {
+        selection.add(n.id);
+      }
+    }
+    renderNodes(); renderInspector();
+    suppressClick = true;                     // don't let the click clear it again
   });
 
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape') { setTool('select'); select(null); }
-    const tag = (document.activeElement || {}).tagName;
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel && !running) {
-      if (sel.kind === 'node') removeNode(sel.id); else removeEdge(sel.id);
+  wrap.addEventListener('click', (ev) => {
+    if (suppressClick) { suppressClick = false; return; }
+    if (running || ev.target.closest('.node') || ev.target.closest('.edge-hit') || ev.target.closest('button')) return;
+    if (armed) {
+      const p = toCanvas(ev.clientX, ev.clientY);
+      place(armed, p.x, p.y);
+      if (!ev.shiftKey) arm(null);
+    } else {
+      if (selection.size) { selection.clear(); renderNodes(); }
+      select(null);
     }
   });
+
+  // ------------------ spacebar canvas panning ------------------------------
+  // Hold space and drag anywhere to pan — the same gesture design tools use.
+  let spaceDown = false;
+  let pan = null;               // {sx, sy, sl, st} pointer + scroll start
+
+  function setSpace(v) {
+    if (spaceDown === v) return;
+    spaceDown = v;
+    wrap.classList.toggle('space-pan', v);
+    if (!v && pan) { pan = null; wrap.classList.remove('panning'); }
+  }
+
+  // capture phase: beats the node-drag / marquee / edge handlers, so the
+  // first press-drag while space is held pans instead of moving an asset
+  scroller.addEventListener('pointerdown', (ev) => {
+    if (!spaceDown || ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    suppressClick = true;       // a pan is not a click: keep the selection
+    pan = { sx: ev.clientX, sy: ev.clientY,
+            sl: scroller.scrollLeft, st: scroller.scrollTop };
+    wrap.classList.add('panning');
+    try { scroller.setPointerCapture(ev.pointerId); } catch { /* ok */ }
+  }, true);
+  scroller.addEventListener('pointermove', (ev) => {
+    if (!pan) return;
+    scroller.scrollLeft = pan.sl - (ev.clientX - pan.sx);
+    scroller.scrollTop = pan.st - (ev.clientY - pan.sy);
+  }, true);
+  scroller.addEventListener('pointerup', () => {
+    if (!pan) return;
+    pan = null; wrap.classList.remove('panning');
+  }, true);
+  scroller.addEventListener('pointercancel', () => {
+    if (!pan) return;
+    pan = null; wrap.classList.remove('panning');
+  }, true);
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { setTool('select'); select(null); if (selection.size) { selection.clear(); renderNodes(); } }
+    const tag = (document.activeElement || {}).tagName;
+    // space = pan modifier (keep it out of text inputs; a focused button is
+    // blurred instead — space after clicking a button must pan, not re-click)
+    if (ev.key === ' ') {
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      ev.preventDefault();                    // don't scroll the page instead
+      if (tag === 'BUTTON' && document.activeElement.blur) {
+        document.activeElement.blur();
+      }
+      if (!ev.repeat) setSpace(true);
+      return;
+    }
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && !running) {
+      if (selection.size) {
+        for (const id of [...selection]) removeNode(id);
+        selection.clear();
+      } else if (sel) {
+        if (sel.kind === 'node') removeNode(sel.id); else removeEdge(sel.id);
+      }
+    }
+  });
+  document.addEventListener('keyup', (ev) => {
+    if (ev.key === ' ') setSpace(false);
+  });
+  window.addEventListener('blur', () => setSpace(false));   // alt-tab safety
 
   // ---------------------------- mutations ------------------------------
   function place(type, x, y) {
@@ -380,10 +629,22 @@
   // ---------------------------- inspector ------------------------------
   function renderInspector() {
     if (!sel) {
+      if (selection.size) {          // rubber-band selection, nothing single
+        inspector.innerHTML = `<div class="insp"><h3>${selection.size} assets selected</h3>
+          <div class="meta">Drag any of them to move the whole group.
+          Del / Backspace removes all of them. Click empty canvas to clear.</div>
+          <button class="btn danger" id="insp-del-multi">Delete selected</button></div>`;
+        inspector.querySelector('#insp-del-multi').onclick = () => {
+          for (const id of [...selection]) removeNode(id);
+          selection.clear();
+        };
+        return;
+      }
       inspector.innerHTML = `<div class="insp-empty">Select a component to inspect it.<br><br>
         Drag components from the palette (or click, then click the canvas).
         Hosts carry their own <b>EDR / Sysmon</b> toggles here. The link tool
-        toggles connections; select any wire to unlink it.</div>`;
+        toggles connections; select any wire to unlink it. Drag on empty
+        canvas to multi-select; the &#9679; on a node hides its lines.</div>`;
       return;
     }
     if (sel.kind === 'edge') {
@@ -472,7 +733,8 @@
   function setRunning(v) {
     running = v;
     document.body.classList.toggle('running', v);
-    if (v) { armed = null; ghost.classList.add('hidden'); select(null); syncPalette(); }
+    if (v) { prevZoom = zoom; armed = null; ghost.classList.add('hidden'); select(null); syncPalette(); }
+    else { zoom = prevZoom || 1; }          // leave the run's auto-fit
     fitView();
   }
 
@@ -501,13 +763,18 @@
   function flashBlock(id) { const d = el(id); if (!d) return; d.classList.add('flash-block'); setTimeout(() => d.classList.remove('flash-block'), 2000); }
 
   // ---------------------------- persistence ------------------------------
-  function toJSON() { return { nodes: G.nodes, edges: G.edges, seq: G.seq }; }
+  function toJSON() {
+    return { nodes: G.nodes, edges: G.edges, seq: G.seq,
+             view: { hidden: [...hiddenNodes] } };
+  }
 
   function load(json) {
     G = { nodes: (json.nodes || []).map((n) => ({ props: {}, ...n })),
           edges: (json.edges || []).map((e) => ({ ...e })),
           seq: json.seq || (json.nodes || []).length + 1 };
     sel = null; linkFrom = null;
+    hiddenNodes.clear();
+    for (const id of (json.view && json.view.hidden) || []) hiddenNodes.add(id);
     renderAll();
   }
 
@@ -516,6 +783,8 @@
   buildPalette();
   buildToolbar();
   syncToolbar();
+  applyView();               // size the zoom stage at startup (otherwise the
+                             // canvas has no scrollable area until first zoom)
   window.addEventListener('resize', () => { renderEdges(); fitView(); });
 
   window.Canvas = {

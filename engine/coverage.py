@@ -25,6 +25,11 @@ from dataclasses import dataclass
 
 from .models import Graph, Node, CLOUD_KINDS, HOST_TYPES, SUBNET_TYPES, WINDOWS_TYPES
 
+# The detection catalog lives in detections.py (technique -> which sensor
+# kind has analytics, minimum context rank, alert text). Re-exported here
+# so the rest of the engine keeps a single import point.
+from .detections import ALERT_RULES, ALERT_TEXT, match_alert  # noqa: F401
+
 # ---------------------------------------------------------------------------
 # ATT&CK data sources used by the scenarios (component names, shortened)
 # ---------------------------------------------------------------------------
@@ -54,6 +59,8 @@ SENSOR_SPECS: dict[str, dict] = {
     # --- network sensors ---
     "zeek":    {"sources": ["Network Connection Creation", "Network Traffic Content"],
                 "context": "network_meta", "scope": "subnet"},
+    "ids":     {"sources": ["Network Connection Creation", "Network Traffic Content"],
+                "context": "content", "scope": "subnet"},
     "netflow": {"sources": ["Network Connection Creation"],
                 "context": "tuple", "scope": "subnet_or_firewall"},
     "siem":    {"sources": [], "context": "inherited", "scope": "ingested"},
@@ -69,7 +76,55 @@ SENSOR_SPECS: dict[str, dict] = {
 # Short tags used in the coverage matrix on the UI
 KIND_TAG = {"edr": "EDR", "sysmon": "SYS", "zeek": "ZK", "netflow": "NF",
             "siem": "SIEM", "waf": "WAF", "firewall": "FW",
-            "mail_gateway": "MGW", "cloud_audit": "AUD"}
+            "mail_gateway": "MGW", "cloud_audit": "AUD", "ids": "IDS"}
+
+# ---------------------------------------------------------------------------
+# EDR capability profile — what the EDR product actually reports.
+#
+# One profile for the whole design (one EDR product, one policy) applied to
+# every host whose per-host EDR toggle is on. Toggled from the "EDR profile"
+# page in the UI and passed through /api/simulate as `edr_caps`.
+#
+#   "ds"      data sources the capability feeds into the EDR subscription
+#   "protect" capability gates a BLOCK_RULES prevention instead of telemetry
+# ---------------------------------------------------------------------------
+EDR_CAPABILITIES = [
+    {"key": "process", "label": "Process & command-line telemetry",
+     "ds": ["Process Creation", "Command Execution"],
+     "desc": ("The EDR's anchor sense: every process spawn with full command "
+              "line and parent. Without it the agent degrades to a dumb "
+              "5-tuple network logger — no attribution, no context, no "
+              "analytics that need process context.")},
+    {"key": "file", "label": "File writes & file access",
+     "ds": ["File Creation", "File Access"],
+     "desc": ("Dropped payloads, staged archives, bulk reads of user data. "
+              "The difference between seeing a dropper land and seeing only "
+              "the process that later ran it.")},
+    {"key": "injection", "label": "Process access & injection monitoring",
+     "ds": ["Process Access"],
+     "desc": ("LSASS handle requests and cross-process memory access — the "
+              "raw feed credential-dumping analytics live on.")},
+    {"key": "net_attr", "label": "Network connections with process attribution",
+     "ds": ["Network Connection Creation"],
+     "desc": ("Per-process connection events (which process talked to whom). "
+              "Without it, beaconing is just firewall noise with no owning "
+              "process.")},
+    {"key": "logon", "label": "Logon session tracking (4624/4625)",
+     "ds": ["Logon Session Creation"], "default": False,
+     "desc": ("Interactive / remote logon sessions on the host. Many agents "
+              "leave this to Windows Event Log — enable it only if yours "
+              "actually ingests 4624/4625.")},
+    {"key": "cred_protect", "label": "Credential-theft prevention (auto-kill)",
+     "protect": True, "default": True,
+     "desc": ("Behavioral prevention: terminate processes touching LSASS "
+              "memory (T1003). A protection decision, not telemetry — off "
+              "means dumping succeeds even on EDR-instrumented hosts.")},
+]
+DEFAULT_EDR_CAPS: dict[str, bool] = {c["key"]: c.get("default", True)
+                                     for c in EDR_CAPABILITIES}
+
+# technique prefix -> capability that must be ON for the prevention to fire
+BLOCK_CAPS = {"T1003": "cred_protect"}
 
 
 @dataclass
@@ -96,8 +151,18 @@ def _expand_via_siem(inst: SensorInst, siem_links: dict) -> list[SensorInst]:
 class Coverage:
     """Precomputed placement map: which sensor instances can see what."""
 
-    def __init__(self, graph: Graph):
+    def __init__(self, graph: Graph, edr_caps: dict | None = None):
         self.graph = graph
+        # effective EDR capability profile: defaults overridden by whatever
+        # the UI sent (unknown keys and non-bools are ignored)
+        self.edr_caps = dict(DEFAULT_EDR_CAPS)
+        for k, v in (edr_caps or {}).items():
+            if k in self.edr_caps and isinstance(v, bool):
+                self.edr_caps[k] = v
+        # data sources the EDR subscription carries under this profile
+        self._edr_sources = {ds for c in EDR_CAPABILITIES
+                             if self.edr_caps.get(c["key"])
+                             for ds in c.get("ds", [])}
         self.host_sensors: dict[str, list[SensorInst]] = defaultdict(list)
         self.cloud_sensors: dict[str, list[SensorInst]] = {}
         self.siem_links: dict[str, list[str]] = defaultdict(list)
@@ -131,9 +196,11 @@ class Coverage:
         # props.edr / props.sysmon carries that sensor directly.
         for h in g.hosts():
             if h.props.get("edr"):
+                # context quality tracks the profile: without process
+                # telemetry the agent degrades to a 5-tuple network logger
+                edr_ctx = "full" if self.edr_caps.get("process") else "tuple"
                 self.host_sensors[h.id].append(
-                    SensorInst(h.id, "edr", f"EDR \u00b7 {h.label}",
-                               SENSOR_SPECS["edr"]["context"]))
+                    SensorInst(h.id, "edr", f"EDR \u00b7 {h.label}", edr_ctx))
             # Sysmon is Windows-only — a deliberate blind spot on Linux
             if h.props.get("sysmon") and h.type in WINDOWS_TYPES:
                 self.host_sensors[h.id].append(
@@ -154,17 +221,20 @@ class Coverage:
                         SensorInst(n.id, n.type, n.label, SENSOR_SPECS[n.type]["context"]))
                 continue
 
-            if n.type == "zeek":
-                # Zeek sees network metadata for the segment its SPAN port is on
+            if n.type in ("zeek", "ids"):
+                # Zeek (metadata) and IDS (payload signatures) both monitor
+                # the segment their SPAN port is plugged into
                 for nb in g.neighbors(n.id):
                     m = g.node(nb)
                     if m and m.type in SUBNET_TYPES:
                         for h_id in self.subnet_hosts[m.id]:
                             self.host_sensors[h_id].append(
-                                SensorInst(n.id, "zeek", n.label, "network_meta"))
+                                SensorInst(n.id, n.type, n.label,
+                                           SENSOR_SPECS[n.type]["context"]))
                     elif m and m.type in HOST_TYPES:
                         self.host_sensors[m.id].append(
-                            SensorInst(n.id, "zeek", n.label, "network_meta"))
+                            SensorInst(n.id, n.type, n.label,
+                                       SENSOR_SPECS[n.type]["context"]))
             elif n.type == "netflow":
                 for nb in g.neighbors(n.id):
                     m = g.node(nb)
@@ -185,6 +255,12 @@ class Coverage:
             if n.type in CLOUD_KINDS:
                 self.cloud_sensors[n.id] = [
                     SensorInst(n.id, "cloud_audit", f"{n.label} audit log", "api")]
+
+    def sources_for(self, kind: str) -> list[str]:
+        """Data sources a sensor kind subscribes to, honoring the EDR profile."""
+        if kind == "edr":
+            return sorted(self._edr_sources)
+        return SENSOR_SPECS[kind]["sources"]
 
     # -- event visibility ------------------------------------------------------
     def visible_sensors(self, ev: dict, target: Node,
@@ -213,7 +289,7 @@ class Coverage:
         elif ds in NETWORK_DS:
             # host-attached sensors that include network telemetry
             for inst in self.host_sensors.get(target.id, []):
-                if ds in SENSOR_SPECS[inst.kind]["sources"]:
+                if ds in self.sources_for(inst.kind):
                     raw.append(inst)
             # appliances on the path log what transits them
             if path_ids:
@@ -226,7 +302,7 @@ class Coverage:
 
         else:  # host-local telemetry (process, file, logon, ...)
             for inst in self.host_sensors.get(target.id, []):
-                if ds in SENSOR_SPECS[inst.kind]["sources"]:
+                if ds in self.sources_for(inst.kind):
                     raw.append(inst)
 
         # expand each raw sensor through the SIEMs it ships to
@@ -234,65 +310,6 @@ class Coverage:
         for inst in raw:
             out.extend(_expand_via_siem(inst, self.siem_links))
         return out
-
-
-# ---------------------------------------------------------------------------
-# Detection rules: technique prefix -> [(sensor kinds, min context rank)]
-# A visible event raises an ALERT only if a sensor with sufficient context
-# has analytics for the technique. Rows without analytics are just rows.
-# ---------------------------------------------------------------------------
-ALERT_RULES: dict[str, list[tuple[str, int]]] = {
-    "T1566": [("mail_gateway", 0), ("siem", 0)],       # phishing alerts from mail gw / SIEM
-    "T1204": [("edr", 2), ("siem", 2)],                # user execution w/ process context
-    "T1059": [("edr", 2), ("siem", 2)],                # script interpreter
-    "T1071": [("edr", 2), ("siem", 2)],                # C2 needs process attribution
-    "T1003": [("edr", 2), ("siem", 2)],                # credential dumping
-    "T1021": [("edr", 2), ("siem", 2)],                # remote services / lateral movement
-    "T1190": [("waf", 0), ("siem", 1), ("edr", 2)],    # exploit: WAF sees payload, else process
-    "T1505": [("edr", 2), ("siem", 2)],                # web shell persistence
-    "T1036": [("edr", 2), ("siem", 3)],                # masquerading needs EDR-grade context
-    "T1005": [("edr", 3), ("siem", 3)],                # file access needs EDR-grade telemetry
-    "T1041": [("edr", 2), ("siem", 2)],                # exfil over C2 needs attribution
-    "T1078": [("siem", 0)],                            # valid accounts (cloud logon analytics)
-    "T1580": [("siem", 0)],                            # cloud infrastructure discovery
-    "T1530": [("siem", 0)],                            # data from cloud storage
-    "T1567": [("edr", 2), ("siem", 0)],                # exfil to cloud storage
-}
-
-# Human-readable alert reasons per technique prefix (shown on alert rows)
-ALERT_TEXT = {
-    "T1566": "Phishing: malicious attachment flagged",
-    "T1204": "Suspicious Office/document child process",
-    "T1059": "Suspicious scripted interpreter execution",
-    "T1071": "Possible C2 beacon (periodic egress w/ process attribution)",
-    "T1003": "Credential dumping: LSASS access",
-    "T1021": "Suspicious remote service logon/execution",
-    "T1190": "Web exploit attempt / shell spawned by web server",
-    "T1505": "Web shell drop or spawn under web server process",
-    "T1036": "Masquerading: system binary name outside system path",
-    "T1005": "Bulk file access by untrusted process",
-    "T1041": "Large outbound transfer from suspicious process",
-    "T1078": "Anomalous cloud console logon (new geo/device)",
-    "T1580": "Cloud infra enumeration (Describe/List burst)",
-    "T1530": "Bulk GetObject from cloud storage",
-    "T1567": "Upload to external file-sharing / cloud storage",
-}
-
-
-def match_alert(technique: str, inst: SensorInst) -> str | None:
-    """Return an alert reason if this sensor instance would alert, else None."""
-    prefix = None
-    for p in ALERT_RULES:
-        if technique.startswith(p) and (prefix is None or len(p) > len(prefix)):
-            prefix = p
-    if prefix is None:
-        return None
-    rank = CONTEXT_RANK.get(inst.context, 0)
-    for kind, min_rank in ALERT_RULES[prefix]:
-        eff_kind = "siem" if inst.via_siem else inst.kind
-        if eff_kind == kind and rank >= min_rank:
-            return f"{ALERT_TEXT[prefix]} ({technique})"
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +357,12 @@ def check_blocks(graph: Graph, technique: str, target: Node,
         return None
 
     for kind, cond, prop, text in BLOCK_RULES[prefix]:
+        # preventions can be switched off per capability profile (e.g. the
+        # EDR credential-theft protection toggle)
+        cap = BLOCK_CAPS.get(prefix)
+        if (cap and cond == "on_host" and kind == "edr"
+                and not coverage.edr_caps.get(cap, True)):
+            continue
         if cond == "in_path":
             if not path_ids:
                 continue  # no drawn path from an Internet entry point

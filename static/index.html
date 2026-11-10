@@ -15,6 +15,7 @@
 
     <div class="tb-group" id="design-controls">
       <button id="btn-scenarios" class="btn" title="Create, duplicate and edit adversary scenarios">Scenarios</button>
+      <button id="btn-edr" class="btn" title="Choose which EDR telemetry streams are active">EDR profile</button>
       <button id="btn-example" class="btn" title="Load the bundled example architecture">Load example</button>
       <button id="btn-clear" class="btn" title="Remove everything from the canvas">Clear</button>
       <button id="btn-export" class="btn" title="Download this design as JSON">Export</button>
@@ -47,7 +48,7 @@
     </div>
 
     <div class="tb-spacer"></div>
-    <div class="hint" id="mode-hint">drag from the palette &amp; drop on the canvas &middot; link tool toggles a connection &middot; hosts carry EDR / Sysmon toggles in the inspector</div>
+    <div class="hint" id="mode-hint">drag from the palette &amp; drop on the canvas &middot; wheel = zoom &middot; space + drag = pan &middot; drag empty canvas = multi-select &middot; the &#9673; on a node hides its lines</div>
   </header>
 
   <!-- ================== canvas + side panels ================== -->
@@ -55,9 +56,13 @@
     <aside id="palette"><!-- populated by canvas.js --></aside>
 
     <section id="canvas-wrap">
-      <div id="view">
-        <svg id="edge-svg"><!-- edges --></svg>
-        <div id="node-layer"><!-- component nodes --></div>
+      <div id="canvas-scroll">
+        <div id="zoom-stage">
+          <div id="view">
+            <svg id="edge-svg"><!-- edges --></svg>
+            <div id="node-layer"><!-- component nodes --></div>
+          </div>
+        </div>
       </div>
       <div id="place-ghost" class="hidden"></div>
     </section>
@@ -99,6 +104,7 @@
   <script src="/static/js/canvas.js__XTPQ__"></script>
   <script src="/static/js/player.js__XTPQ__"></script>
   <script src="/static/js/editor.js__XTPQ__"></script>
+  <script src="/static/js/edr.js__XTPQ__"></script>
   <script src="/static/js/app.js__XTPQ__"></script>
 </body>
 </html>

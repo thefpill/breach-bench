@@ -60,6 +60,7 @@
     if (window.ScenarioEditor) {
       window.ScenarioEditor.onSaved(() => loadScenarios());   // editor changes refresh the picker
     }
+    $('btn-edr').onclick = () => window.EdrPage.open();       // EDR telemetry profile page
     $('btn-example').onclick = loadExample;
     $('btn-clear').onclick = () => Canvas.clear();
     $('btn-export').onclick = () => {
@@ -117,7 +118,8 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ graph, scenario_id: $('scenario-select').value,
-                               noise_rate: parseInt($('noise-rate').value, 10) }),
+                               noise_rate: parseInt($('noise-rate').value, 10),
+                               edr_caps: window.EdrPage ? window.EdrPage.get() : {} }),
       });
       const rec = await res.json();
       if (rec.error) { alert(rec.error); return; }

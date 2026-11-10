@@ -85,14 +85,42 @@ body {
 }
 
 #canvas-wrap {
-  flex: 1; position: relative; background: var(--panel2); overflow: auto;
+  flex: 1; position: relative; background: var(--panel2); overflow: hidden;
   background-image: radial-gradient(#16202b 1px, transparent 1px);
   background-size: 26px 26px;
 }
-#view { position: absolute; inset: 0; transform-origin: 0 0; }
+/* zoom/pan architecture: #canvas-scroll scrolls, #zoom-stage is sized to
+   base*zoom so the scrollbars track the scaled content, #view keeps the
+   base (logical) size and is transform-scaled with origin at 0,0 */
+#canvas-scroll { position: absolute; inset: 0; overflow: auto; }
+#zoom-stage { position: relative; transform-origin: 0 0; }
+#view { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 #edge-svg, #node-layer { position: absolute; inset: 0; }
 #node-layer { pointer-events: none; }
 #edge-svg { pointer-events: none; }
+
+/* rubber-band selection rectangle (drag on empty canvas) */
+#marquee {
+  position: absolute; display: none; z-index: 24; pointer-events: none;
+  border: 1px solid var(--teal); background: rgba(45, 212, 191, .08);
+}
+
+/* hold space and drag to pan the canvas (design-tool style) */
+#canvas-wrap.space-pan #canvas-scroll,
+#canvas-wrap.space-pan .node { cursor: grab !important; }
+#canvas-wrap.panning #canvas-scroll,
+#canvas-wrap.panning .node { cursor: grabbing !important; }
+
+/* per-asset connection-line visibility: the ◉ toggle on each node */
+.node .eye-btn {
+  position: absolute; top: -9px; right: -9px; width: 18px; height: 18px;
+  border-radius: 50%; border: 1px solid #33465a; background: #101a24;
+  color: #9fb3c8; font-size: 10px; line-height: 15px; text-align: center;
+  cursor: pointer; opacity: .55; transition: opacity .15s; padding: 0; z-index: 5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
+.node:hover .eye-btn, .node .eye-btn.off { opacity: .95; }
+.node .eye-btn.off { color: var(--amber); border-color: var(--amber); }
 
 #place-ghost {
   position: absolute; pointer-events: none; opacity: .55; z-index: 30;
@@ -124,6 +152,7 @@ body {
   border: 1px solid rgba(245, 166, 35, .4); border-radius: 3px; padding: 0 4px;
 }
 .node.sel .tag { outline: 2px solid #e7eef6; outline-offset: 1px; }
+.node.multi-sel .tag { outline: 2px dashed var(--teal); outline-offset: 1px; }
 .node.link-from .tag { outline: 2px dashed var(--amber); outline-offset: 1px; }
 .node.on-path .tag { box-shadow: 0 0 0 2px rgba(245, 166, 35, .55); }
 .node.pulse .tag { animation: pulse 1.1s ease-out 2; }
@@ -191,6 +220,11 @@ svg .edge.dead { stroke: #22303e; }
 body.running #palette, body.running #inspector { opacity: .35; pointer-events: none; }
 body.running .node { cursor: pointer; }
 
+#zoombar {
+  position: absolute; top: 46px; right: 10px; z-index: 40;
+  display: flex; gap: 6px;
+}
+
 /* ------------------------------ run panel ------------------------------ */
 #run-panel {
   height: 44vh; background: var(--panel); border-top: 1px solid var(--line);
@@ -238,6 +272,7 @@ body.running .node { cursor: pointer; }
 .k-edr { background: #3b2c10; color: var(--amber); }
 .k-sysmon { background: #3b2c10; color: #fbbf24; }
 .k-zeek { background: #11302c; color: var(--teal); }
+.k-ids { background: #11302c; color: #86efac; }
 .k-netflow { background: #11302c; color: #5eead4; }
 .k-siem { background: #26203f; color: var(--violet); }
 .k-waf, .k-firewall, .k-mail_gateway { background: #3a1518; color: #f87171; }
@@ -339,6 +374,48 @@ table.matrix .grp { color: #55677a; font-size: 9px; display: block; }
   .hint { display: none; }
   #run-panel { height: 50vh; }
 }
+
+/* ----------------------- EDR profile overlay ----------------------- */
+#edr-overlay {
+  position: fixed; inset: 0; z-index: 100; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+#edr-overlay.hidden { display: none !important; }
+#edr-overlay header {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+#edr-overlay h2 { margin: 0; font-size: 15px; letter-spacing: .04em; }
+.edr-note { color: var(--dim); font-size: 11.5px; flex: 1; }
+
+.edr-body { flex: 1; overflow-y: auto; padding: 16px 18px 40px; }
+.edr-lead {
+  color: var(--dim); font-size: 12.5px; line-height: 1.5;
+  max-width: 760px; margin-bottom: 6px;
+}
+.edr-card {
+  border: 1px solid var(--line); border-left: 4px solid var(--teal);
+  border-radius: 8px; background: #0e141b; padding: 10px 12px;
+  margin: 10px 0; max-width: 760px;
+}
+.edr-card.off { border-left-color: #5b6672; opacity: .72; }
+.edr-head { display: flex; align-items: center; gap: 10px; }
+.edr-head b { font-size: 13px; flex: 1; }
+.edr-state {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .08em;
+  border-radius: 3px; padding: 2px 7px;
+}
+.edr-card.on .edr-state { background: #11302c; color: var(--teal); }
+.edr-card.off .edr-state { background: #1b2735; color: var(--dim); }
+.edr-desc { color: var(--dim); font-size: 12px; margin: 6px 0 6px; line-height: 1.5; }
+.edr-feeds { display: flex; gap: 6px; flex-wrap: wrap; }
+.edr-feeds span, .edr-feeds .pf {
+  font-family: var(--mono); font-size: 10px; background: #16202b;
+  border: 1px solid #233140; border-radius: 3px; padding: 1px 6px;
+  color: var(--teal);
+}
+.edr-feeds .pf { color: var(--amber); border-color: #4d3d1e; }
+.edr-hint { color: var(--dim); font-size: 12px; margin-top: 10px; min-height: 16px; }
 
 /* --------------------- scenario editor overlay ---------------------- */
 #scn-overlay {
