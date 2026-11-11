@@ -8,15 +8,17 @@ an honest verdict: blocked, detected, observed, or blind. No percentages, no
 scores. Blind spots are something you walk into and feel, not a number in a
 report.
 
-**Live demo** -> https://breach-bench.vercel.app/
-
 ## Quick start
 
 ```bash
 pip install -r requirements.txt
-python main.py           
+python main.py            # → http://localhost/  (port 80)
 ```
-Port 80 needs extra rights on Linux but you can overwrite default port with `--port 8000`.
+
+Port 80 needs extra rights on Linux: run with `sudo`, grant python the
+capability once with `sudo setcap 'cap_net_bind_service=+ep' $(readlink -f
+$(which python3))`, or pick another port with `--port 8000`. `--host` and
+`PORT=` override the defaults (all interfaces / port 80).
 
 ## The 30-second tour
 
@@ -48,6 +50,13 @@ Port 80 needs extra rights on Linux but you can overwrite default port with `--p
 Mouse wheel zooms. Space plus drag pans. Drag on empty canvas to
 rubber-band select. The dot on each asset hides just that asset's
 connection lines. The canvas grows as you drag toward its edge.
+
+## On a phone or tablet
+
+The whole app works with fingers. The topbar folds into the ☰ menu,
+one finger on empty canvas pans, two fingers pinch-zoom, and the Box
+tool rubber-band selects. Tapping an asset slides up its inspector;
+the asset palette lives in the "+ Assets" drawer.
 
 ## Stack
 

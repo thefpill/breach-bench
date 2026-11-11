@@ -56,6 +56,18 @@
   // controls
   // ------------------------------------------------------------------
   function wireControls() {
+    // mobile: the hamburger panel closes after picking an action, and a tap
+    // anywhere outside it (canvas, panels) dismisses it
+    $('tb-menu-wrap').addEventListener('click', (ev) => {
+      if (ev.target.closest('.btn') || ev.target.closest('.file-btn')) {
+        document.body.classList.remove('menu-open');
+      }
+    });
+    document.addEventListener('click', (ev) => {
+      if (!document.body.classList.contains('menu-open')) return;
+      if (ev.target.closest('#tb-menu-wrap') || ev.target.closest('#btn-menu')) return;
+      document.body.classList.remove('menu-open');
+    });
     $('btn-scenarios').onclick = () => window.ScenarioEditor.open();
     if (window.ScenarioEditor) {
       window.ScenarioEditor.onSaved(() => loadScenarios());   // editor changes refresh the picker

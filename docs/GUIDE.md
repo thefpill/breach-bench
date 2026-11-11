@@ -33,6 +33,12 @@ python main.py            # → http://localhost/  (port 80)
    connection lines** — a SIEM wired to six places stops drawing six wires;
    *unhide lines* brings everything back. Hidden lines are view-only: the
    simulation is unaffected, and the preference survives export/import.
+
+   **Touch devices:** the same tools, finger-shaped. The topbar folds into
+   the ☰ menu, the palette into a **+ Assets** drawer, and the inspector
+   becomes a bottom sheet that follows your selection. One finger on empty
+   canvas pans, two fingers pinch-zoom, and the **Box** tool does the
+   rubber-band select. Tap a palette item, then tap the canvas to place.
 2. **Configure hosts directly on the asset.** Select any host and toggle its
    own telemetry in the inspector:
    * **EDR agent** — full process tree, command lines, network with process

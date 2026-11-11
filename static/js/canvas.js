@@ -31,6 +31,7 @@
   const ghost = document.getElementById('place-ghost');
   const paletteEl = document.getElementById('palette');
   const inspector = document.getElementById('inspector');
+  const inspBody = document.getElementById('insp-body');   // re-rendered by renderInspector
 
   // ------------------------------------------------------------------
   // Component catalog: tag shown in the node box, display name, color
@@ -166,7 +167,7 @@
     const cx = clientX - r.left, cy = clientY - r.top;
     const lx = (cx + scroller.scrollLeft) / zoom;
     const ly = (cy + scroller.scrollTop) / zoom;
-    zoom = Math.min(3, Math.max(0.35, nz));
+    zoom = Math.min(3, Math.max(0.25, nz));
     applyView();
     scroller.scrollLeft = lx * zoom - cx;
     scroller.scrollTop = ly * zoom - cy;
@@ -227,6 +228,7 @@
         // drop: place the component where the pointer is
         const p = toCanvas(ev.clientX, ev.clientY);
         place(armed, p.x, p.y);
+        if (isNarrow()) closePaletteDrawer();  // phone drawer gets out of the way
         arm(null);
       } else if (hit && hit.closest('.pal-item') === item) {
         // plain click on the item: stay armed, user will click the canvas
@@ -247,15 +249,34 @@
   let toolbar;
   function buildToolbar() {
     toolbar = document.createElement('div');
-    toolbar.style.cssText = 'position:absolute;top:8px;right:10px;z-index:40;display:flex;gap:6px;';
+    toolbar.style.cssText = 'position:absolute;top:8px;right:10px;z-index:40;';
+    toolbar.id = 'canvas-toolbar';
     toolbar.innerHTML = `
-      <button class="btn" data-t="select">Select</button>
-      <button class="btn" data-t="link" title="Click node A then node B — toggles the connection">Link / unlink</button>
-      <button class="btn" data-t="delete">Delete</button>`;
+      <button class="btn" data-t="select" data-full="Select" data-short="Sel">Select</button>
+      <button class="btn" data-t="lasso" data-full="Box" data-short="Box"
+        title="Drag a box on the canvas to multi-select — the touch-friendly rubber band">Box</button>
+      <button class="btn" data-t="link" data-full="Link / unlink" data-short="Link"
+        title="Click node A then node B — toggles the connection">Link / unlink</button>
+      <button class="btn" data-t="delete" data-full="Delete" data-short="Del">Delete</button>`;
     toolbar.querySelectorAll('button').forEach((b) =>
       b.addEventListener('click', () => { if (!running) setTool(b.dataset.t); }));
     wrap.appendChild(toolbar);
     buildZoombar();
+    applyToolbarLabels();
+  }
+
+  // phones get short labels: four full-width buttons cannot fit a 390px row
+  function applyToolbarLabels() {
+    const narrow = window.matchMedia('(max-width: 640px)').matches;
+    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    toolbar.querySelectorAll('button').forEach((b) => {
+      if (!b.dataset.short) return;
+      b.textContent = narrow ? b.dataset.short : b.dataset.full;
+    });
+    // desktop select already rubber-bands with the mouse: the Box tool only
+    // earns its space where a finger cannot shift-drag
+    const box = toolbar.querySelector('[data-t=lasso]');
+    if (box) box.style.display = (narrow || coarse) ? '' : 'none';
   }
 
   // zoom + line-visibility controls (fixed to the wrap, outside the scroller)
@@ -300,12 +321,20 @@
     // Auto-fit during a run so the whole design stays visible in the
     // smaller (split-screen) canvas area. Design mode keeps the user zoom.
     if (!running || !G.nodes.length) { applyView(); return; }
+    fitContent();
+  }
+
+  function fitContent() {
+    if (!G.nodes.length) return;
     const xs = G.nodes.map((n) => n.x), ys = G.nodes.map((n) => n.y);
     const minX = Math.min(...xs) - 90, maxX = Math.max(...xs) + 90;
     const minY = Math.min(...ys) - 70, maxY = Math.max(...ys) + 70;
-    zoom = Math.max(0.3, Math.min(1.25,
+    zoom = Math.max(0.2, Math.min(1.25,
       wrap.clientWidth / (maxX - minX), wrap.clientHeight / (maxY - minY)));
     applyView();
+    // scroll the fitted content into view from the top-left corner
+    scroller.scrollLeft = Math.max(0, (minX * zoom) - 20);
+    scroller.scrollTop = Math.max(0, (minY * zoom) - 20);
   }
 
   function renderAll() {
@@ -469,6 +498,8 @@
 
   scroller.addEventListener('pointerdown', (ev) => {
     if (running || ev.button !== 0 || armed) return;
+    if (ev.pointerType === 'touch' && tool !== 'lasso') return;   // a finger pans instead
+    if (!ev.isPrimary) return;                                    // pinch's second finger
     if (ev.target.closest('.node') || ev.target.closest('button') ||
         ev.target.closest('.edge-hit')) return;
     const p = toCanvas(ev.clientX, ev.clientY);
@@ -500,7 +531,13 @@
       }
     }
     renderNodes(); renderInspector();
+    if (selection.size) { inspPinned = true; syncInsp(); }   // phones: open the sheet
     suppressClick = true;                     // don't let the click clear it again
+  });
+  scroller.addEventListener('pointercancel', () => {
+    // native scroll (or the OS) stole the pointer — never leave a stale rect
+    if (!marquee) return;
+    marquee = null; marqueeEl.style.display = 'none';
   });
 
   wrap.addEventListener('click', (ev) => {
@@ -509,6 +546,7 @@
     if (armed) {
       const p = toCanvas(ev.clientX, ev.clientY);
       place(armed, p.x, p.y);
+      if (isNarrow()) closePaletteDrawer();    // placed from the drawer: put it away
       if (!ev.shiftKey) arm(null);
     } else {
       if (selection.size) { selection.clear(); renderNodes(); }
@@ -583,6 +621,103 @@
   });
   window.addEventListener('blur', () => setSpace(false));   // alt-tab safety
 
+  // ---------------- touch: one-finger pan + two-finger pinch -----------------
+  // Touch has no spacebar and no wheel. One finger on empty canvas pans the
+  // viewport (design-tool style), two fingers pinch-zoom around the midpoint.
+  // The rubber-band stays reachable through the Box (lasso) tool.
+  const touches = new Map();      // pointerId -> latest {x, y}
+  let pinch = null;               // {d0, z0, cx, cy}
+  let touchPan = null;            // {sx, sy, sl, st, moved}
+
+  const isNarrow = () => window.matchMedia('(max-width: 899px)').matches;
+  let inspPinned = true;         // false after the user closed the sheet manually
+  function inspSheet(open) { document.body.classList.toggle('insp-open', !!open); }
+  function syncInsp() {
+    if (!isNarrow()) return;
+    const has = !!(sel || selection.size);
+    if (!has) { inspPinned = true; inspSheet(false); }
+    else if (inspPinned) inspSheet(true);
+  }
+  function closePaletteDrawer() { document.body.classList.remove('palette-open'); }
+
+  scroller.addEventListener('pointerdown', (ev) => {
+    if (ev.pointerType !== 'touch') return;
+    touches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (touches.size >= 2 && !drag) {
+      // pinch wins over any single-finger gesture in progress
+      stopTouchPan();
+      if (marquee) { marquee = null; marqueeEl.style.display = 'none'; }
+      const pts = [...touches.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (d > 0) {
+        pinch = { d0: d, z0: zoom,
+                  cx: (pts[0].x + pts[1].x) / 2, cy: (pts[0].y + pts[1].y) / 2 };
+        ev.preventDefault();
+      }
+      return;
+    }
+    if (touches.size === 1 && !drag && !armed &&
+        (running || tool === 'select') &&
+        !ev.target.closest('.node') && !ev.target.closest('button') &&
+        !ev.target.closest('.edge-hit')) {
+      // one finger on empty canvas pans the canvas (works during runs too)
+      touchPan = { sx: ev.clientX, sy: ev.clientY,
+                   sl: scroller.scrollLeft, st: scroller.scrollTop, moved: false };
+      wrap.classList.add('panning');
+      try { scroller.setPointerCapture(ev.pointerId); } catch { /* ok */ }
+    }
+  }, true);
+
+  scroller.addEventListener('pointermove', (ev) => {
+    if (ev.pointerType !== 'touch') return;
+    const t = touches.get(ev.pointerId);
+    if (t) { t.x = ev.clientX; t.y = ev.clientY; }
+    if (pinch && touches.size >= 2) {
+      const pts = [...touches.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (d > 0) setZoomAt(pinch.z0 * (d / pinch.d0), pinch.cx, pinch.cy);
+      return;
+    }
+    if (touchPan) {
+      const dx = ev.clientX - touchPan.sx, dy = ev.clientY - touchPan.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 3) touchPan.moved = true;
+      scroller.scrollLeft = touchPan.sl - dx;
+      scroller.scrollTop = touchPan.st - dy;
+    }
+  }, true);
+
+  function stopTouchPan() {
+    if (touchPan && touchPan.moved) {
+      suppressClick = true;                    // a pan is not a click
+      setTimeout(() => { suppressClick = false; }, 0);   // residue guard
+    }
+    touchPan = null;
+    wrap.classList.remove('panning');
+  }
+  function touchEnd(ev) {
+    touches.delete(ev.pointerId);
+    if (pinch && touches.size < 2) {
+      pinch = null;
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);   // click, if any, goes first
+    }
+    if (touchPan && !touches.size) stopTouchPan();
+  }
+  scroller.addEventListener('pointerup', touchEnd, true);
+  scroller.addEventListener('pointercancel', touchEnd, true);
+
+  // mobile chrome: hamburger-close, palette drawer toggle, inspector sheet close
+  document.getElementById('btn-menu').addEventListener('click', () => {
+    document.body.classList.toggle('menu-open');
+  });
+  document.getElementById('pal-toggle').addEventListener('click', () => {
+    document.body.classList.toggle('palette-open');
+  });
+  document.getElementById('insp-close').addEventListener('click', () => {
+    inspPinned = false; inspSheet(false);
+  });
+  window.addEventListener('resize', applyToolbarLabels);
+
   // ---------------------------- mutations ------------------------------
   function place(type, x, y) {
     if (!type) return;
@@ -618,6 +753,7 @@
     G.edges = G.edges.filter((e) => e.src !== id && e.dst !== id);
     if (sel && sel.id === id) sel = null;
     renderAll(); emitChange();
+    syncInsp();
   }
 
   function removeEdge(id) {
@@ -630,17 +766,17 @@
   function renderInspector() {
     if (!sel) {
       if (selection.size) {          // rubber-band selection, nothing single
-        inspector.innerHTML = `<div class="insp"><h3>${selection.size} assets selected</h3>
+        inspBody.innerHTML = `<div class="insp"><h3>${selection.size} assets selected</h3>
           <div class="meta">Drag any of them to move the whole group.
           Del / Backspace removes all of them. Click empty canvas to clear.</div>
           <button class="btn danger" id="insp-del-multi">Delete selected</button></div>`;
-        inspector.querySelector('#insp-del-multi').onclick = () => {
+        inspBody.querySelector('#insp-del-multi').onclick = () => {
           for (const id of [...selection]) removeNode(id);
           selection.clear();
         };
         return;
       }
-      inspector.innerHTML = `<div class="insp-empty">Select a component to inspect it.<br><br>
+      inspBody.innerHTML = `<div class="insp-empty">Select a component to inspect it.<br><br>
         Drag components from the palette (or click, then click the canvas).
         Hosts carry their own <b>EDR / Sysmon</b> toggles here. The link tool
         toggles connections; select any wire to unlink it. Drag on empty
@@ -650,10 +786,10 @@
     if (sel.kind === 'edge') {
       const e = G.edges.find((x) => x.id === sel.id); if (!e) { sel = null; return renderInspector(); }
       const a = node(e.src), b = node(e.dst);
-      inspector.innerHTML = `<div class="insp"><h3>Connection</h3>
+      inspBody.innerHTML = `<div class="insp"><h3>Connection</h3>
         <div class="meta">${esc(a ? a.label : '?')} &harr; ${esc(b ? b.label : '?')}</div>
         <button class="btn danger" id="insp-del">Unlink</button></div>`;
-      inspector.querySelector('#insp-del').onclick = () => removeEdge(e.id);
+      inspBody.querySelector('#insp-del').onclick = () => removeEdge(e.id);
       return;
     }
     const n = node(sel.id); if (!n) { sel = null; return renderInspector(); }
@@ -691,7 +827,7 @@
         }).join('')
       : '<div class="meta">not linked to anything yet</div>';
 
-    inspector.innerHTML = `<div class="insp"><h3>${esc(t.name || n.type)}</h3>
+    inspBody.innerHTML = `<div class="insp"><h3>${esc(t.name || n.type)}</h3>
       <div class="row"><label>Label</label>
         <input type="text" id="p-label" value="${esc(n.label)}"></div>
       ${propsHtml}
@@ -700,14 +836,14 @@
       <div class="meta" style="margin-top:10px">${esc(t.desc || '')}</div>
       <button class="btn danger" id="insp-del">Delete component</button></div>`;
 
-    inspector.querySelector('#p-label').addEventListener('input', (ev) => {
+    inspBody.querySelector('#p-label').addEventListener('input', (ev) => {
       n.label = ev.target.value || n.label;
       const lbl = el(n.id) && el(n.id).querySelector('.lbl');
       if (lbl) lbl.textContent = n.label;
       emitChange();
     });
     const bind = (id, prop, isSel) => {
-      const input = inspector.querySelector(id); if (!input) return;
+      const input = inspBody.querySelector(id); if (!input) return;
       input.addEventListener('change', () => {
         if (isSel) n.props[prop] = input.value; else n.props[prop] = input.checked;
         renderNodes();     // badges on the node reflect the toggle instantly
@@ -720,20 +856,26 @@
     bind('#p-sysmon', 'sysmon');
     bind('#p-mfa', 'mfa');
     bind('#p-bp', 'block_public');
-    inspector.querySelectorAll('.lnk .mini').forEach((btn) =>
+    inspBody.querySelectorAll('.lnk .mini').forEach((btn) =>
       btn.onclick = () => removeEdge(btn.dataset.edge));
-    inspector.querySelector('#insp-del').onclick = () => removeNode(n.id);
+    inspBody.querySelector('#insp-del').onclick = () => removeNode(n.id);
   }
 
   function select(s) {
     sel = s; renderNodes(); renderEdges(); renderInspector();
+    if (!running) {
+      if (sel || selection.size) inspPinned = true;
+      syncInsp();                              // phones: bottom sheet follows selection
+    } else inspSheet(false);                   // never during playback
   }
 
   // ---------------------------- run-mode FX ------------------------------
   function setRunning(v) {
     running = v;
     document.body.classList.toggle('running', v);
-    if (v) { prevZoom = zoom; armed = null; ghost.classList.add('hidden'); select(null); syncPalette(); }
+    if (v) { prevZoom = zoom; armed = null; ghost.classList.add('hidden');
+             if (selection.size) { selection.clear(); renderNodes(); }   // no edit chrome in playback
+             select(null); syncPalette(); closePaletteDrawer(); inspSheet(false); }
     else { zoom = prevZoom || 1; }          // leave the run's auto-fit
     fitView();
   }
@@ -776,6 +918,9 @@
     hiddenNodes.clear();
     for (const id of (json.view && json.view.hidden) || []) hiddenNodes.add(id);
     renderAll();
+    // narrow viewports start with the whole design in view (the example and
+    // most saved designs are drawn wider than a phone); desktop keeps 100%
+    if (G.nodes.length && (isNarrow() || wrap.clientWidth < 760)) fitContent();
   }
 
   function clear() { load({ nodes: [], edges: [] }); emitChange(); }

@@ -4,7 +4,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Security Architecture Playground</title>
   <link rel="stylesheet" href="/static/style.css__XTPQ__">
 </head>
@@ -13,6 +13,7 @@
   <header id="topbar">
     <div class="brand">SEC<span>ARCH</span>·PLAYGROUND</div>
 
+    <div id="tb-menu-wrap">
     <div class="tb-group" id="design-controls">
       <button id="btn-scenarios" class="btn" title="Create, duplicate and edit adversary scenarios">Scenarios</button>
       <button id="btn-edr" class="btn" title="Choose which EDR telemetry streams are active">EDR profile</button>
@@ -31,6 +32,7 @@
         <span id="noise-val">20</span>/min</label>
       <button id="btn-run" class="btn primary">Run &#9654;</button>
     </div>
+    </div><!-- /#tb-menu-wrap -->
 
     <div class="tb-group hidden" id="playback-controls">
       <button id="btn-back" class="btn" title="Back to design mode">&#8592; Design</button>
@@ -48,6 +50,7 @@
     </div>
 
     <div class="tb-spacer"></div>
+    <button id="btn-menu" class="btn" title="Menu" aria-label="Menu">&#9776;</button>
     <div class="hint" id="mode-hint">drag from the palette &amp; drop on the canvas &middot; wheel = zoom &middot; space + drag = pan &middot; drag empty canvas = multi-select &middot; the &#9673; on a node hides its lines</div>
   </header>
 
@@ -65,12 +68,16 @@
         </div>
       </div>
       <div id="place-ghost" class="hidden"></div>
+      <button id="pal-toggle" class="btn" aria-label="Show asset palette">&#65291; Assets</button>
     </section>
 
-    <aside id="inspector"><div class="insp-empty">Select a component to inspect it.<br><br>
-      Sensors only see the data sources they subscribe to, on the host/segment
-      they are wired to. A SIEM only shows what is shipped to it. Blind spots
-      are the point.</div></aside>
+    <aside id="inspector">
+      <button id="insp-close" aria-label="Close inspector">&#215;</button>
+      <div id="insp-body"><div class="insp-empty">Select a component to inspect it.<br><br>
+        Sensors only see the data sources they subscribe to, on the host/segment
+        they are wired to. A SIEM only shows what is shipped to it. Blind spots
+        are the point.</div></div>
+    </aside>
   </main>
 
   <!-- ======================= run panel ======================= -->

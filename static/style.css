@@ -18,14 +18,21 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { height: 100%; overscroll-behavior: none; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 13px/1.45 system-ui, "Segoe UI", Roboto, sans-serif;
   display: flex; flex-direction: column; overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;         /* no double-tap zoom outside the canvas */
 }
 .hidden { display: none !important; }
 .mono { font-family: var(--mono); }
+
+/* mobile chrome exists only under 900px (see the responsive section) */
+#btn-menu, #pal-toggle, #insp-close { display: none; }
+/* keeps the two control groups as direct topbar flex items on desktop */
+#tb-menu-wrap { display: contents; }
 
 /* ------------------------------ top bar ------------------------------ */
 #topbar {
@@ -92,7 +99,8 @@ body {
 /* zoom/pan architecture: #canvas-scroll scrolls, #zoom-stage is sized to
    base*zoom so the scrollbars track the scaled content, #view keeps the
    base (logical) size and is transform-scaled with origin at 0,0 */
-#canvas-scroll { position: absolute; inset: 0; overflow: auto; }
+#canvas-scroll { position: absolute; inset: 0; overflow: auto; touch-action: none;
+  /* touch gestures are fully hand-rolled: one finger pans, two pinch */ }
 #zoom-stage { position: relative; transform-origin: 0 0; }
 #view { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 #edge-svg, #node-layer { position: absolute; inset: 0; }
@@ -182,8 +190,10 @@ svg .edge.dead { stroke: #22303e; }
 
 #inspector {
   width: 230px; background: var(--panel); border-left: 1px solid var(--line);
-  padding: 10px; overflow-y: auto; flex-shrink: 0; font-size: 12px;
+  padding: 10px; flex-shrink: 0; font-size: 12px;
+  display: flex; flex-direction: column;
 }
+#insp-body { flex: 1; min-height: 0; overflow-y: auto; }
 .insp-empty { color: var(--dim); padding: 6px 2px; line-height: 1.5; }
 .insp h3 { margin: 2px 0 8px; font-size: 13px; }
 .insp .row { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
@@ -224,10 +234,11 @@ body.running .node { cursor: pointer; }
   position: absolute; top: 46px; right: 10px; z-index: 40;
   display: flex; gap: 6px;
 }
+#canvas-toolbar { display: flex; gap: 6px; }
 
 /* ------------------------------ run panel ------------------------------ */
 #run-panel {
-  height: 44vh; background: var(--panel); border-top: 1px solid var(--line);
+  height: 44vh; height: 44dvh; background: var(--panel); border-top: 1px solid var(--line);
   display: flex; flex-direction: column; flex-shrink: 0;
 }
 #tabs {
@@ -336,7 +347,7 @@ body.running .node { cursor: pointer; }
 .reveal-hidden .why, .reveal-hidden .seen { visibility: hidden; }
 
 /* coverage matrix */
-#matrix-holder { padding: 12px 14px 20px; }
+#matrix-holder { padding: 12px 14px 20px; overflow-x: auto; }
 table.matrix { border-collapse: collapse; font-size: 10.5px; }
 table.matrix th, table.matrix td {
   border: 1px solid #1a2530; padding: 3px 6px; text-align: center;
@@ -368,11 +379,114 @@ table.matrix .grp { color: #55677a; font-size: 9px; display: block; }
 ::-webkit-scrollbar-thumb { background: #22303e; border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-@media (max-width: 900px) {
-  #inspector { display: none; }
-  #palette { width: 118px; }
-  .hint { display: none; }
-  #run-panel { height: 50vh; }
+/* ---------------------- mobile / tablet / touch ----------------------
+   <900px: the topbar folds into a hamburger menu and the inspector
+   becomes a bottom sheet that follows the selection.
+   <640px: the palette also folds into a slide-in drawer, the toolbar
+   switches to short labels, and the console drops its wide columns.
+   Touch gestures (one finger pan, two finger pinch) live in canvas.js. */
+@media (max-width: 899px) {
+  #topbar {
+    padding: 7px 10px; gap: 8px;
+    padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right));
+  }
+  .brand { font-size: 12.5px; }
+  .tb-group { border-left: none; padding-left: 0; }
+  .hint, .tb-spacer { display: none; }
+  #btn-menu { display: inline-flex; margin-left: auto; flex-shrink: 0; }
+  #tb-menu-wrap { display: none; }
+  #playback-controls { flex-wrap: wrap; }
+
+  body.menu-open #tb-menu-wrap {
+    display: flex; flex-direction: column; gap: 10px;
+    position: fixed; top: 50px; left: 8px; right: 8px; z-index: 90;
+    background: var(--panel); border: 1px solid #2a3a4c; border-radius: 12px;
+    padding: 12px; box-shadow: 0 16px 44px rgba(0, 0, 0, .6);
+  }
+  body.menu-open #tb-menu-wrap .tb-group {
+    flex-direction: column; align-items: stretch; gap: 8px; padding: 0;
+  }
+  body.menu-open #tb-menu-wrap .btn,
+  body.menu-open #tb-menu-wrap .file-btn {
+    padding: 11px 12px; font-size: 13.5px; text-align: center; justify-content: center;
+  }
+  body.menu-open #tb-menu-wrap .fld { justify-content: space-between; font-size: 13px; gap: 10px; }
+  body.menu-open #tb-menu-wrap .fld select { flex: 1; min-width: 0; padding: 9px 8px; font-size: 13px; }
+  body.menu-open #tb-menu-wrap .fld input[type=range] { flex: 1; width: auto; }
+
+  #zoombar { top: 52px; right: 8px; }
+  /* playback needs the whole canvas: edit chrome would just cover it */
+  body.running #canvas-toolbar, body.running #zoombar { display: none; }
+
+  /* inspector: bottom sheet that follows the selection */
+  #inspector {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
+    max-height: 62%; border-left: none; border-top: 1px solid var(--line);
+    border-radius: 14px 14px 0 0; transform: translateY(103%);
+    transition: transform .22s ease; z-index: 85;
+    box-shadow: 0 -10px 34px rgba(0, 0, 0, .55);
+  }
+  body.insp-open #inspector { transform: none; }
+  #insp-close {
+    display: flex; align-self: flex-end; width: 36px; height: 30px;
+    align-items: center; justify-content: center; margin-bottom: 2px;
+    background: #16202b; border: 1px solid #233140; border-radius: 8px;
+    color: var(--dim); font-size: 17px; cursor: pointer; flex-shrink: 0;
+  }
+
+  /* run panel: slightly taller, tabs scroll sideways instead of squashing */
+  #run-panel { height: 46vh; height: 46dvh; }
+  #tabs { overflow-x: auto; }
+  .tab { white-space: nowrap; flex-shrink: 0; }
+  #alert-tally { padding-right: 2px; }
+  #progress { width: 110px; }
+
+  /* scenario editor + EDR overlays stack on narrow screens */
+  .scn-body { flex-direction: column; }
+  .scn-list { width: auto; max-height: 32%; border-right: none;
+    border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .scn-grid, .sf-grid, .em-grid { grid-template-columns: 1fr; }
+  .scn-actions { flex-wrap: wrap; }
+}
+
+@media (max-width: 639px) {
+  /* palette: slide-in drawer over the canvas */
+  #palette {
+    position: fixed; left: 0; top: 0; bottom: 0; width: 218px; z-index: 95;
+    transform: translateX(-103%); transition: transform .22s ease;
+    box-shadow: 10px 0 30px rgba(0, 0, 0, .45);
+  }
+  body.palette-open #palette { transform: none; }
+  #pal-toggle {
+    display: inline-flex; position: absolute; left: 10px;
+    bottom: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
+    z-index: 45; padding: 10px 14px; font-size: 13px; border-radius: 999px;
+    background: rgba(16, 22, 29, .92);
+  }
+  body.running #pal-toggle { display: none; }
+
+  /* defender console: drop the wide columns, keep rows readable */
+  .crow .sensor, .crow .ds { display: none; }
+  .crow { padding: 2px 8px; }
+  #console { font-size: 11px; }
+  .schip { min-width: 86px; padding: 6px 10px; }
+  .schip b { font-size: 18px; }
+  #tab-adversary { padding: 8px 10px 16px; }
+  #matrix-holder { padding: 8px 8px 14px; }
+  .verdict { margin-left: 0; }
+}
+
+/* bigger hit targets on phones and tablets */
+@media (pointer: coarse) {
+  .btn { padding: 9px 12px; font-size: 13px; }
+  .mini { padding: 4px 10px; font-size: 11.5px; }
+  .pal-item { padding: 8px; font-size: 12.5px; }
+  .eye-btn { width: 24px; height: 24px; top: -11px; right: -11px;
+    font-size: 12px; line-height: 21px; }
+  #zoombar { top: 56px; }
+  .tab { padding: 10px 12px; }
+  .step-card { padding: 10px 12px; }
 }
 
 /* ----------------------- EDR profile overlay ----------------------- */
