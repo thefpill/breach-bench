@@ -1,4 +1,4 @@
-"""Graph data model for the security architecture playground.
+"""Graph data model for Breach Bench.
 
 A *design* is a graph of components (nodes) and connections (edges) drawn on
 the canvas. Everything else in the engine consumes this object:

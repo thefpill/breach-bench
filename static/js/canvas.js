@@ -321,20 +321,49 @@
     // Auto-fit during a run so the whole design stays visible in the
     // smaller (split-screen) canvas area. Design mode keeps the user zoom.
     if (!running || !G.nodes.length) { applyView(); return; }
-    fitContent();
+    centerContent(1.25);
   }
 
-  function fitContent() {
+  // node boxes are CENTERED on their (x, y) anchor (.node uses
+  // translate(-50%, -50%)), so a box sticks out ~55px left/right and ~30px
+  // up/down around its anchor — keep in sync with .node in style.css
+  const NODE_HW = 55, NODE_HH = 30;
+
+  // Fit + CENTER: choose a zoom so the design fits the viewport with even
+  // breathing room (never above zoomCap — a desktop load never upscales past
+  // 100%, it only zooms out when the design overflows), then put the whole
+  // group in the MIDDLE of the visible canvas. Both mobile and desktop open
+  // centered; nothing hugs the top-left corner any more.
+  function centerContent(zoomCap) {
     if (!G.nodes.length) return;
     const xs = G.nodes.map((n) => n.x), ys = G.nodes.map((n) => n.y);
-    const minX = Math.min(...xs) - 90, maxX = Math.max(...xs) + 90;
-    const minY = Math.min(...ys) - 70, maxY = Math.max(...ys) + 70;
-    zoom = Math.max(0.2, Math.min(1.25,
-      wrap.clientWidth / (maxX - minX), wrap.clientHeight / (maxY - minY)));
-    applyView();
-    // scroll the fitted content into view from the top-left corner
-    scroller.scrollLeft = Math.max(0, (minX * zoom) - 20);
-    scroller.scrollTop = Math.max(0, (minY * zoom) - 20);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const anchorW = maxX - minX, anchorH = maxY - minY;
+    const visW = anchorW + 2 * NODE_HW, visH = anchorH + 2 * NODE_HH;
+
+    zoom = Math.max(0.2, Math.min(zoomCap,
+      wrap.clientWidth / (visW + 140), wrap.clientHeight / (visH + 140)));
+
+    // the world size computeWorld() will actually produce: it only sees the
+    // anchors and guarantees maxX + WORLD_PAD of room, so a centered group
+    // keeps WORLD_PAD of anchor room on BOTH sides — any other target size
+    // would be recomputed away and leave the group lopsided
+    const spanW = zoom < 1 ? wrap.clientWidth / zoom : wrap.clientWidth;
+    const spanH = zoom < 1 ? wrap.clientHeight / zoom : wrap.clientHeight;
+    const targetW = Math.min(WORLD_CAP, Math.max(spanW, anchorW + 2 * WORLD_PAD));
+    const targetH = Math.min(WORLD_CAP, Math.max(spanH, anchorH + 2 * WORLD_PAD));
+
+    // move the whole design so its middle sits in the middle of the world
+    const dx = targetW / 2 - (minX + maxX) / 2;
+    const dy = targetH / 2 - (minY + maxY) / 2;
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+      for (const n of G.nodes) { n.x += dx; n.y += dy; }
+    }
+    renderAll();
+    // then look at the world's middle (zoomed-out views have scroll room)
+    scroller.scrollLeft = Math.max(0, (worldW * zoom - wrap.clientWidth) / 2);
+    scroller.scrollTop = Math.max(0, (worldH * zoom - wrap.clientHeight) / 2);
   }
 
   function renderAll() {
@@ -918,9 +947,11 @@
     hiddenNodes.clear();
     for (const id of (json.view && json.view.hidden) || []) hiddenNodes.add(id);
     renderAll();
-    // narrow viewports start with the whole design in view (the example and
-    // most saved designs are drawn wider than a phone); desktop keeps 100%
-    if (G.nodes.length && (isNarrow() || wrap.clientWidth < 760)) fitContent();
+    // every load opens centered: narrow viewports shrink to fit (the example
+    // and most saved designs are drawn wider than a phone), desktop keeps
+    // 100% unless the design overflows — either way the group sits in the
+    // middle of the canvas with even padding, never in a corner
+    if (G.nodes.length) centerContent(isNarrow() || wrap.clientWidth < 760 ? 1.25 : 1);
   }
 
   function clear() { load({ nodes: [], edges: [] }); emitChange(); }
@@ -931,6 +962,11 @@
   applyView();               // size the zoom stage at startup (otherwise the
                              // canvas has no scrollable area until first zoom)
   window.addEventListener('resize', () => { renderEdges(); fitView(); });
+  // the run console opening/closing (and the mobile keyboard) changes the
+  // canvas box without a window resize — the auto-fit must see those too
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => { renderEdges(); fitView(); }).observe(wrap);
+  }
 
   window.Canvas = {
     load, toJSON, clear, addNode,

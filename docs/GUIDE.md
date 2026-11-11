@@ -1,4 +1,4 @@
-# Security Architecture Playground
+# Breach Bench
 
 Draw a security architecture → pick an adversary scenario → watch the kill chain
 propagate through **your** design → read what your sensors actually saw.
@@ -33,6 +33,10 @@ python main.py            # → http://localhost/  (port 80)
    connection lines** — a SIEM wired to six places stops drawing six wires;
    *unhide lines* brings everything back. Hidden lines are view-only: the
    simulation is unaffected, and the preference survives export/import.
+   Whenever a design loads (the bundled example, an autosave or an import)
+   it opens **centered in the canvas with even padding on every side** — on
+   phones it is also zoomed to fit the screen, on desktop it stays at 100%
+   unless the design is wider than the window.
 
    **Touch devices:** the same tools, finger-shaped. The topbar folds into
    the ☰ menu, the palette into a **+ Assets** drawer, and the inspector

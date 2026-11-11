@@ -1,4 +1,4 @@
-# Security Architecture Playground
+# Breach Bench
 
 **See your blind spots before an attacker does.**
 

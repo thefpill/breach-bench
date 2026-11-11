@@ -1,4 +1,4 @@
-"""Populate the playground's scenario library from the MITRE CTI extract.
+"""Populate Breach Bench's scenario library from the MITRE CTI extract.
 
 Run after scripts/extract_attack.py:
 
@@ -117,7 +117,7 @@ def build_emits(t: dict, command: str) -> list[dict]:
 
 
 def build_scenario(g: dict) -> dict | None:
-    """Turn one CTI group into a validated playground scenario."""
+    """Turn one CTI group into a validated Breach Bench scenario."""
     by_tactic: dict[str, list[dict]] = {}
     for t in g["techniques"]:
         t = {**t, "_tac": primary_tactic(t)}

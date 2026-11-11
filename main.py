@@ -1,4 +1,4 @@
-"""FastAPI server for the security architecture playground.
+"""FastAPI server for Breach Bench.
 
 Serves:
   GET    /                     the canvas UI (static/index.html)
@@ -35,7 +35,7 @@ from engine.models import Graph
 from engine.simulator import simulate
 
 ROOT = pathlib.Path(__file__).parent
-app = FastAPI(title="Security Architecture Playground")
+app = FastAPI(title="Breach Bench")
 
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     # on Linux, so we probe the bind first and give an actionable hint
     # instead of uvicorn's bare "[Errno 13]" line.
     # ------------------------------------------------------------------
-    ap = argparse.ArgumentParser(description="Security Architecture Playground")
+    ap = argparse.ArgumentParser(description="Breach Bench")
     ap.add_argument("--host", default="0.0.0.0",
                     help="bind address (default: all interfaces; "
                          "use 127.0.0.1 for localhost only)")

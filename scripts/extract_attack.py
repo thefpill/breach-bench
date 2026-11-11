@@ -13,7 +13,7 @@ Output JSON (default scripts/data/mitre-attack-groups.json): every ATT&CK
   * technique id + name (T1134.002 / "Access Token Manipulation: ...")
   * tactics (from the technique's kill-chain phases)
   * ATT&CK data components the technique would touch, mapped onto the
-    playground's shortened data-source names (the simulator's join key)
+    the app's shortened data-source names (the simulator's join key)
   * the procedure description verbatim (cleaned of citations)
   * a *concrete command* extracted from the procedure where one is
     documented (WinAPI call, shell command, tool invocation, URL...)
@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE.parent))
 from engine.coverage import DATA_SOURCES  # the engine's shortened vocabulary
 
 # ---------------------------------------------------------------------------
-# ATT&CK data-component name -> playground data source (the simulator's join
+# ATT&CK data-component name -> app data source (the simulator's join
 # key). Components the engine does not model (registry, AD, firmware, ...)
 # are deliberately unmapped: no modeled telemetry means no invented rows.
 # ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ def main() -> None:
             "note": ("procedures are quoted verbatim from the ATT&CK Groups objects; "
                      "'command' is the best concrete command/API call extracted from "
                      "the procedure text, 'commands' lists up to 5 candidates; "
-                     "'data_sources' maps ATT&CK data components onto the playground's "
+                     "'data_sources' maps ATT&CK data components onto the app's "
                      "modeled sensor vocabulary (unmodeled components are omitted)."),
         },
         "groups": out_groups,

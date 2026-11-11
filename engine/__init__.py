@@ -1,4 +1,4 @@
-"""Security architecture playground — simulation engine.
+"""Breach Bench — simulation engine.
 
 Package layout (each file has one job):
     models.py     graph data model (components + connections)
